@@ -1,0 +1,168 @@
+Verteilte Systeme - Woche 1 - Threads
+=====================================
+
+Prozess vs. Thread
+------------------
+Prozess = laufendes Programm, eigener Speicher (Adressraum), eigene Dateien/Sockets
+  -> Prozesse sind voneinander abgeschottet
+
+Thread = Ausfuehrungsstrang IN einem Prozess
+  - jeder Prozess hat mind. einen (bei Java: main)
+  - pro Thread eigen: Program Counter, Register, Stack (lokale Variablen, Methodenaufrufe)
+  - geteilt: Heap (alle Objekte mit new), static Felder, Code
+
+  => Threads koennen easy ueber gemeinsame Objekte kommunizieren
+  => ABER genau da entstehen die Fehler (s. CounterDemo)
+
+Bsp. CounterDemo:
+  Heap:    Counter-Objekt mit c         <- geteilt!
+  thread1: i, b  (Stack)                <- privat
+  thread2: i, d  (Stack)                <- privat
+
+
+Wie laufen Threads?
+-------------------
+- OS-Scheduler verteilt Threads auf die CPU-Kerne
+- mehr Threads als Kerne -> es wird hin und her gewechselt (Context Switch,
+  Register + PC werden gesichert und vom naechsten geladen)
+- praemptiv: OS kann Thread JEDERZEIT unterbrechen, auch mitten in einer Methode
+- mehrere Kerne = echt parallel, ein Kern = nur nebenlaeufig (abwechselnd)
+- Reihenfolge ist NICHT vorhersagbar!! nie drauf verlassen
+
+Java: new Thread(...) = Platform Thread, 1:1 ein OS-Thread (eigener Stack ~1MB)
+seit Java 21 auch Virtual Threads -> JVM verteilt viele leichte Threads auf
+wenige OS-Threads, gut fuer Server mit viel I/O
+
+Zustaende (Thread.State):
+  NEW           -> erzeugt, noch nicht gestartet
+  RUNNABLE      -> laeuft oder ist bereit
+  BLOCKED       -> wartet auf synchronized-Lock
+  WAITING       -> join(), wait()
+  TIMED_WAITING -> sleep(ms), join(ms)
+  TERMINATED    -> run() ist fertig
+
+  NEW --start()--> RUNNABLE --fertig--> TERMINATED
+                     |  ^
+                     v  |
+          BLOCKED / WAITING / TIMED_WAITING
+
+
+Threads in Java benutzen
+------------------------
+1) von Thread ableiten + run() ueberschreiben (so wie in SimpleThreads)
+     new Thread("name") {
+         public void run() { ... }
+     }.start();
+
+2) Runnable / Lambda uebergeben (CounterThreads) -> eher so machen,
+   Aufgabe und Thread sind getrennt
+     Thread t = new Thread(() -> { ... });
+     t.start();
+
+3) ExecutorService / Thread-Pool -> das nimmt man in "echtem" Code
+     try (ExecutorService pool = Executors.newFixedThreadPool(4)) {
+         Future<Integer> f = pool.submit(() -> 42);
+         System.out.println(f.get());
+     }
+
+4) Virtual Threads (ab Java 21)
+     Thread.startVirtualThread(() -> { ... });
+
+!! start() vs. run() !!
+  start() -> JVM macht neuen Thread, der ruft dann run() auf
+  run() direkt aufrufen -> ganz normaler Methodenaufruf im aktuellen Thread,
+                           KEIN neuer Thread (typischer Fehler)
+
+join():
+  t.join() -> aufrufender Thread wartet bis t fertig ist
+  + Garantie: alles was t geschrieben hat ist danach sichtbar (happens-before)
+
+
+Beispiel 1: SimpleThreads
+-------------------------
+- main startet 10 Threads in einer Schleife, Name "0" bis "9"
+- jeder Thread gibt 5 Schritte aus
+- "" + i wird schon in main ausgewertet -> Name ist fest
+- das innere i im run() ist eine eigene Variable, hat mit dem aeusseren nix zu tun
+- main ist sofort fertig, JVM laeuft aber weiter bis alle (Nicht-Daemon-)Threads
+  fertig sind
+
+was man sieht:
+- Ausgabe jedes Mal anders gemischt, z.B. [3] 0, [7] 0, [7] 1, [8] 0, ...
+- Startreihenfolge != Ausfuehrungsreihenfolge
+- innerhalb EINES Threads bleibt Reihenfolge aber (Schritt 0 vor 1 vor 2 ...)
+- hier kein Fehler, weil keine gemeinsamen Daten veraendert werden
+  (println ist intern synchronisiert, Zeilen werden nicht zerstueckelt)
+
+
+Beispiel 2: CounterDemo -> Race Condition
+-----------------------------------------
+  increment(): b = c; b++; c = b;    (lesen, aendern, schreiben)
+  decrement(): d = c; d--; c = d;
+
+- 2 Threads, EIN gemeinsamer Counter
+- 100000x +1 und 100000x -1  -> muesste 0 sein
+- kam raus: Counter: -1871  (jedes Mal was anderes)
+
+Warum? -> Lost Update
+lesen/aendern/schreiben ist nicht atomar, Scheduler kann dazwischen wechseln:
+
+  Zeit  thread1 (inc)    thread2 (dec)    c
+  1     b = c  (0)                        0
+  2                      d = c  (0)       0
+  3     b++    (1)                        0
+  4     c = b                             1
+  5                      d--    (-1)      1
+  6                      c = d            -1   <- das +1 ist weg!
+
+-> je nachdem wer oefter "verliert" geht es ins Plus oder Minus
+-> theoretisch alles zwischen -100000 und +100000 moeglich
+
+Merke: c++ waere genauso kaputt! Ist im Bytecode auch 3 Schritte
+(getfield, iadd, putfield). b und d machen es nur deutlicher.
+
+Zusaetzlich: Sichtbarkeit (Java Memory Model)
+- ohne Synchronisation ist nicht mal garantiert dass ein Thread sieht was der
+  andere geschrieben hat (CPU-Caches, JIT haelt Werte in Registern, Umsortieren)
+- join() sorgt nur dafuer dass main am Ende den richtigen Endwert sieht
+
+Begriffe:
+- Race Condition = Ergebnis haengt davon ab wie die Threads zeitlich verschraenkt sind
+- kritischer Abschnitt = Code der geteilte Daten liest/schreibt
+- wechselseitiger Ausschluss (Mutual Exclusion) = max. 1 Thread gleichzeitig
+  im kritischen Abschnitt
+
+
+Wie fixt man das?
+-----------------
+a) synchronized (jedes Objekt hat einen Monitor-Lock)
+     public synchronized void increment() { c++; }
+     public synchronized void decrement() { c--; }
+     public synchronized int value() { return c; }
+   -> nur einer gleichzeitig drin, der andere ist BLOCKED
+   -> atomar + sichtbar, Ergebnis immer 0
+
+b) AtomicInteger (ohne Lock, CPU-Befehl Compare-And-Swap)
+     private final AtomicInteger c = new AtomicInteger();
+     public void increment() { c.incrementAndGet(); }
+
+c) ReentrantLock (expliziter Lock, kann mehr: tryLock, Timeout, Fairness)
+     lock.lock();
+     try { c++; } finally { lock.unlock(); }
+
+volatile reicht NICHT! -> nur Sichtbarkeit, aber lesen/aendern/schreiben
+bleibt trotzdem nicht atomar
+
+Nachteile:
+- Threads warten aufeinander -> weniger Parallelitaet
+- Deadlock moeglich: zwei Threads warten gegenseitig auf den Lock vom anderen
+
+
+Was hat das mit Verteilten Systemen zu tun?
+-------------------------------------------
+gleiches Problem nur in gross:
+- mehrere Server/Prozesse greifen auf gemeinsamen Zustand zu (DB, Kontostand, ...)
+- Nachrichten kommen in unbestimmter Reihenfolge an
+- Lost Updates, Sichtbarkeit, Reihenfolge = die Kernprobleme
+- Loesungen dort: verteilte Locks, Transaktionen, Konsens, atomare Operationen
+=> die Thread-Beispiele sind quasi das Mini-Modell davon
