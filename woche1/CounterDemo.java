@@ -54,16 +54,20 @@ class CounterThreads {
     static void testCounter() throws InterruptedException {
         Counter counter = new Counter();
 
-        Thread thread1 = new Thread(() -> {
-            for (int i = 0; i < 100000; i++) {
-                counter.increment();
+        Thread thread1 = new Thread() {
+            public void run() {
+                for (int i = 0; i < 100000; i++) {
+                    counter.increment();
+                }
             }
-        });
-        Thread thread2 = new Thread(() -> {
-            for (int i = 0; i < 100000; i++) {
-                counter.decrement();
+        };
+        Thread thread2 = new Thread() {
+            public void run() {
+                for (int i = 0; i < 100000; i++) {
+                    counter.decrement();
+                }
             }
-        });
+        };
 
         thread1.start();
         thread2.start();
@@ -75,16 +79,20 @@ class CounterThreads {
     static void testSyncCounter() throws InterruptedException {
         SyncCounter syncCounter = new SyncCounter();
 
-        Thread thread1 = new Thread(() -> {
-            for (int i = 0; i < 100000; i++) {
-                syncCounter.increment();
+        Thread thread1 = new Thread() {
+            public void run() {
+                for (int i = 0; i < 100000; i++) {
+                    syncCounter.increment();
+                }
             }
-        });
-        Thread thread2 = new Thread(() -> {
-            for (int i = 0; i < 100000; i++) {
-                syncCounter.decrement();
+        };
+        Thread thread2 = new Thread() {
+            public void run() {
+                for (int i = 0; i < 100000; i++) {
+                    syncCounter.decrement();
+                }
             }
-        });
+        };
 
         thread1.start();
         thread2.start();
